@@ -1,23 +1,29 @@
 
 import time
-from time import strftime
+from datetime import datetime as dt
+from datetime import timedelta as td
 import threading
+import zlib
+
+LOG_FILENAME = '/Users/masato/keys.log'
+TIMESTAMP_FORMAT = '%Y-%m-%d %H:%M:%S'
+REPORT_FILENAME = '/Users/masato/keys.html'
+REPORT_DATE_FORMAT = '%Y-%m-%d'
 
 
 class KeyLogger(object):
 
-    LOG_FILENAME = '/Users/masato/keys.log'
-    TIMESTAMP_FORMAT = '%Y-%m-%d %H:%M:%S'
     TIMESTAMP_INTERVAL = 10
 
     def __init__(self):
-        self.log_file = open(self.LOG_FILENAME, mode='a')
+        self.log_file = open(LOG_FILENAME, mode='a')
         # list of letters to log.
         self.buffer = []
+        self.stopped = False
 
         def timer_func():
             """A thread function which periodically writes out the current timestamp."""
-            while True:
+            while not self.stopped:
                 self.write_to_file()
                 time.sleep(self.TIMESTAMP_INTERVAL)
 
@@ -29,10 +35,49 @@ class KeyLogger(object):
         self.buffer.append(letter)
 
     def write_to_file(self):
-        self.log_file.write(strftime(self.TIMESTAMP_FORMAT) + '\t')
+        self.log_file.write(dt.now().strftime(TIMESTAMP_FORMAT) + '\t')
         self.log_file.write(' '.join(self.buffer) + '\n')
         self.log_file.flush()
         self.buffer = []
+
+        r = Report(LOG_FILENAME)
+        r.write()
+
+    def stop(self):
+        self.stopped = True
+
+
+class Report(object):
+    def __init__(self, log_filename):
+        self.stats = self.read_stats(log_filename)
+
+    def write(self):
+        # report_file = open(REPORT_FILENAME, mode='w')
+        print('<report>')
+        today = dt.now()
+        for d in range(7, -1, -1):
+            d_days_ago = today + td(days=-d)
+            timestamp = d_days_ago.strftime(REPORT_DATE_FORMAT)
+            keys = self.stats.get(d_days_ago.strftime(REPORT_DATE_FORMAT), [])
+            key_joined = ' '.join(keys)
+            key_compressed = zlib.compress(bytes(key_joined, 'UTF-8'))
+
+            print('%s keys=%s, str_len=%s, compressed=%s'
+                  % (timestamp, len(keys), len(key_joined), len(key_compressed)))
+        print('</report>')
+
+    def read_stats(self, filename):
+        """Returns a dict from timestamp (REPORT_DATE_FORMAT) to list of all keys on that day."""
+        log_file = open(filename)
+        day_keys = {}
+        for line in log_file:
+            fields = line.strip().split('\t')
+            if len(fields) == 2:
+                timestamp, keys_str = fields
+                logged_time = dt.strptime(timestamp, TIMESTAMP_FORMAT)
+                keys = keys_str.split(' ')
+                day_keys.setdefault(logged_time.strftime(REPORT_DATE_FORMAT), []).extend(keys)
+        return day_keys
 
 
 def configure(keymap):
@@ -92,3 +137,5 @@ def configure(keymap):
 
     for key, letter in key_letter_map:
         gkeymap[key] = lambda key=key, letter=letter: key_down_letter(key, letter)
+
+    gkeymap['Fn-5'] = lambda: key_logger.stop()
