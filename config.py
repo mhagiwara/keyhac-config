@@ -4,11 +4,22 @@ from datetime import datetime as dt
 from datetime import timedelta as td
 import threading
 import zlib
+import json
+from collections import defaultdict
+
 
 LOG_FILENAME = '/Users/masato/keys.log'
 TIMESTAMP_FORMAT = '%Y-%m-%d %H:%M:%S'
+REPORT_TEMPLATE_FILENAME = '/Users/masato/Library/Application Support/Keyhac/report.html'
 REPORT_FILENAME = '/Users/masato/keys.html'
 REPORT_DATE_FORMAT = '%Y-%m-%d'
+
+
+def calc_moppol(keys):
+    """Given a list of pressed keys, returns the value of moppol (the unit of amount worked)."""
+    key_joined = ' '.join(keys)
+    key_compressed = zlib.compress(bytes(key_joined, 'UTF-8'))
+    return len(key_compressed) - 8      # subtract 8 because compressed empty string has len=8
 
 
 class KeyLogger(object):
@@ -52,32 +63,52 @@ class Report(object):
         self.stats = self.read_stats(log_filename)
 
     def write(self):
-        # report_file = open(REPORT_FILENAME, mode='w')
-        print('<report>')
+        # Create the data for heatmap.
+        data = []
+        per_day_keys = defaultdict(list)
         today = dt.now()
-        for d in range(7, -1, -1):
+        for d in range(6, -1, -1):  # from 6 days ago to today (0 days ago).
             d_days_ago = today + td(days=-d)
             timestamp = d_days_ago.strftime(REPORT_DATE_FORMAT)
-            keys = self.stats.get(d_days_ago.strftime(REPORT_DATE_FORMAT), [])
-            key_joined = ' '.join(keys)
-            key_compressed = zlib.compress(bytes(key_joined, 'UTF-8'))
+            day = d_days_ago.isoweekday()
+            per_hour_keys = self.stats.get(timestamp, {})
 
-            print('%s keys=%s, str_len=%s, compressed=%s'
-                  % (timestamp, len(keys), len(key_joined), len(key_compressed)))
-        print('</report>')
+            for hour in range(0, 24):  # from 0 to 23
+                keys = per_hour_keys.get(hour, [])
+                moppol = calc_moppol(keys)
+                data.append({'day': day,
+                             'hour': hour+1,
+                             'value': moppol})
+                per_day_keys[day].extend(keys)
+
+        # Read the template & replace the placeholder
+        with open(REPORT_TEMPLATE_FILENAME, mode='r') as f:
+            report_template = f.read()
+            report_template = report_template.replace('%DATA%', json.dumps(data))
+
+            # Replace the total placeholder.
+            totals_arr = [calc_moppol(per_day_keys[d]) for d in range(1, 8)]
+            report_template = report_template.replace('%TOTALS%', json.dumps(totals_arr))
+
+        # Write to file.
+        with open(REPORT_FILENAME, mode='w') as f:
+            f.write(report_template)
 
     def read_stats(self, filename):
-        """Returns a dict from timestamp (REPORT_DATE_FORMAT) to list of all keys on that day."""
-        log_file = open(filename)
-        day_keys = {}
-        for line in log_file:
-            fields = line.strip().split('\t')
-            if len(fields) == 2:
-                timestamp, keys_str = fields
-                logged_time = dt.strptime(timestamp, TIMESTAMP_FORMAT)
-                keys = keys_str.split(' ')
-                day_keys.setdefault(logged_time.strftime(REPORT_DATE_FORMAT), []).extend(keys)
-        return day_keys
+        """Returns a dict from timestamp (REPORT_DATE_FORMAT)
+           to dict from hour (integer from 0 to 23) to list of all keys on that time period."""
+        day_hour_keys = defaultdict(lambda: defaultdict(list))
+
+        with open(filename, mode='r') as log_file:
+            for line in log_file:
+                fields = line.strip().split('\t')
+                if len(fields) == 2:
+                    timestamp, keys_str = fields
+                    logged_time = dt.strptime(timestamp, TIMESTAMP_FORMAT)
+                    keys = keys_str.split(' ')
+                    date_str = logged_time.strftime(REPORT_DATE_FORMAT)
+                    day_hour_keys[date_str][logged_time.hour].extend(keys)
+        return day_hour_keys
 
 
 def configure(keymap):
