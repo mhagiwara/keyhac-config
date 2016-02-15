@@ -25,6 +25,7 @@ def calc_moppol(keys):
 class KeyLogger(object):
 
     TIMESTAMP_INTERVAL = 10
+    REPORT_INTERVAL = 60
 
     def __init__(self):
         self.log_file = open(LOG_FILENAME, mode='a')
@@ -32,15 +33,25 @@ class KeyLogger(object):
         self.buffer = []
         self.stopped = False
 
-        def timer_func():
+        def logging_func():
             """A thread function which periodically writes out the current timestamp."""
             while not self.stopped:
                 self.write_to_file()
                 time.sleep(self.TIMESTAMP_INTERVAL)
 
+        def report_func():
+            """A thread function which periodically writes out the report."""
+            while not self.stopped:
+                r = Report(LOG_FILENAME)
+                r.write()
+                time.sleep(self.REPORT_INTERVAL)
+
         # Start the timer thread
-        timer_thread = threading.Thread(target=timer_func)
-        timer_thread.start()
+        logging_thread = threading.Thread(target=logging_func)
+        logging_thread.start()
+
+        report_thread = threading.Thread(target=report_func)
+        report_thread.start()
 
     def log_single_letter(self, letter):
         self.buffer.append(letter)
@@ -50,9 +61,6 @@ class KeyLogger(object):
         self.log_file.write(' '.join(self.buffer) + '\n')
         self.log_file.flush()
         self.buffer = []
-
-        r = Report(LOG_FILENAME)
-        r.write()
 
     def stop(self):
         self.stopped = True
